@@ -34,8 +34,8 @@ local CONFIG = {
     },
     GRAPHICS = {
         QUALITY_LEVEL = Enum.QualityLevel.Level01,
-        DISABLE_LIGHTING = true,
-        DISABLE_SOUNDS = true
+        DISABLE_LIGHTING = false, -- <--- QUITAMOS optimización para no ocultar overheads
+        DISABLE_SOUNDS = false
     }
 }
 
@@ -53,9 +53,7 @@ local ROLE_MENTIONS = {
     ["300m"] = "<@&1425222652271923230>"
 }
 
-local IMAGE_MAP = {
-    -- ["los 67"] = "https://cdn.discordapp.com/attachments/xxx/xxx/xxx.webp"
-}
+local IMAGE_MAP = {}
 
 local EVERYONE = 300000000
 
@@ -74,6 +72,89 @@ local function log(level, message)
     print(string.format("[%s][%s] %s", os.date("%H:%M:%S"), string.upper(level), tostring(message)))
 end
 
+-- ========== MEJOR DETECCIÓN DE BRAINROTS Y OVERHEADS ==========
+
+local function tolow(s) return (s and string.lower(s)) or "" end
+
+local function nameMatchesTarget(petName)
+    if not CONFIG.SEARCH.BRAINROT_NAMES or #CONFIG.SEARCH.BRAINROT_NAMES==0 then return true end
+    local low = tolow(petName)
+    for _, target in ipairs(CONFIG.SEARCH.BRAINROT_NAMES) do
+        if low:find(tolow(target), 1, true) then return true end
+    end
+    return false
+end
+
+local function readFromOverheadRobust(overhead)
+    if not overhead then return nil end
+    local petName, moneyTxt
+    local display = overhead:FindFirstChild("DisplayName", true)
+    local gen = overhead:FindFirstChild("Generation", true)
+    if display and display:IsA("TextLabel") then
+        petName = display.Text ~= "" and display.Text or display.ContentText
+    end
+    if gen and gen:IsA("TextLabel") then
+        moneyTxt = gen.Text ~= "" and gen.Text or gen.ContentText
+    end
+    if not moneyTxt or not tostring(moneyTxt):lower():find("/s") or (not petName or petName=="") then
+        for _, d in ipairs(overhead:GetDescendants()) do
+            if d:IsA("TextLabel") then
+                local t = d.Text ~= "" and d.Text or d.ContentText
+                if t and type(t)=="string" then
+                    if (not moneyTxt) and t:lower():find("/s") then moneyTxt = t end
+                    if (not petName) and d.Name:lower():find("display") then petName = t end
+                end
+            end
+            if petName and moneyTxt then break end
+        end
+    end
+    if (not petName or petName=="") then
+        for _, d in ipairs(overhead:GetDescendants()) do
+            if d:IsA("TextLabel") then
+                local t = d.Text ~= "" and d.Text or d.ContentText
+                if t and type(t)=="string" and not t:lower():find("/s") then petName = t break end
+            end
+        end
+    end
+    if petName and moneyTxt then
+        return petName, moneyTxt
+    end
+    return nil
+end
+
+local function scanPlots()
+    local entries = {}
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return 0 end
+    for _, plot in ipairs(plots:GetChildren()) do
+        local podiums = plot:FindFirstChild("AnimalPodiums") or plot:FindFirstChild("AnimalPosiums")
+        if podiums then
+            for _, slot in ipairs(podiums:GetChildren()) do
+                local base = slot:FindFirstChild("Base")
+                local spawn = base and base:FindFirstChild("Spawn")
+                local attachment = spawn and spawn:FindFirstChild("Attachment")
+                local overhead = attachment and attachment:FindFirstChild("AnimalOverhead")
+                if overhead then
+                    local petName, moneyTxt = readFromOverheadRobust(overhead)
+                    if petName and moneyTxt and nameMatchesTarget(petName) then
+                        table.insert(entries, {name = petName, generation = moneyTxt})
+                    end
+                end
+            end
+        end
+    end
+    for _, pet in ipairs(entries) do
+        local value = parseGeneration(pet.generation)
+        local tier = determineTier(value)
+        if tier == "10m" or tier == "50m" or tier == "100m" or tier == "300m" then
+            pet.players = #Players:GetPlayers().."/8"
+            sendToWebhook(pet)
+            task.wait(0.05)
+        end
+    end
+    return #entries
+end
+
 local function safeCall(func, errorMessage)
     local success, result1, result2 = pcall(func)
     if not success then
@@ -84,75 +165,6 @@ local function safeCall(func, errorMessage)
         return {result1, result2}
     end
     return result1
-end
-
-local ENCODE_MAP = {
-    a="G7Q", b="L2R", c="M8X", d="K5T", e="N9V", f="P3Z", g="Q6B", h="R1F",
-    i="S4J", j="T0M", k="U7C", l="V2G", m="W8K", n="X5N", o="Y9P", p="Z3S",
-    q="A6U", r="B1X", s="C4A", t="D0D", u="E7F", v="F2H", w="H8J", x="I5L",
-    y="J9O", z="K3Q",
-    A="m6Z", B="n1B", C="o4D", D="p0F", E="q7H", F="r2J", G="s8L", H="t5N",
-    I="u9P", J="v3R", K="w6T", L="x1V", M="y4X", N="z0A", O="A7C", P="B2E",
-    Q="C8G", R="D5I", S="E9K", T="F3M", U="G6O", V="H1Q", W="I4S", X="J0U",
-    Y="K7W", Z="L2Y",
-    ["0"]="p7Q", ["1"]="q2R", ["2"]="r8T", ["3"]="s5V", ["4"]="t9X", ["5"]="u3Z",
-    ["6"]="v6B", ["7"]="w1D", ["8"]="x4F", ["9"]="y0H", ["-"]="z7J"
-}
-
-local accentMap = {
-    ["á"] = "a", ["à"] = "a", ["ã"] = "a", ["â"] = "a", ["ä"] = "a",
-    ["é"] = "e", ["è"] = "e", ["ê"] = "e", ["ë"] = "e",
-    ["í"] = "i", ["ì"] = "i", ["î"] = "i", ["ï"] = "i",
-    ["ó"] = "o", ["ò"] = "o", ["õ"] = "o", ["ô"] = "o", ["ö"] = "o",
-    ["ú"] = "u", ["ù"] = "u", ["û"] = "u", ["ü"] = "u",
-    ["ç"] = "c", ["ñ"] = "n", ["ý"] = "y", ["ÿ"] = "y"
-}
-
-local function normalizeText(text)
-    if not text then return "" end
-    local normalized = text:lower()
-    for accent, replacement in pairs(accentMap) do
-        normalized = normalized:gsub(accent, replacement)
-    end
-    return normalized:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-end
-
-local function cleanHtmlTags(text)
-    if not text then return "" end
-    text = string.gsub(text, "<[^>]*>", "")
-    text = string.gsub(text, "%s+", " ")
-    text = string.gsub(text, "^%s*(.-)%s*$", "%1")
-    return text
-end
-
-local function isBrainrotPet(name)
-    if not name then return false end
-    local normalizedName = normalizeText(name)
-    for _, brainrotName in ipairs(CONFIG.SEARCH.BRAINROT_NAMES) do
-        if normalizedName:find(normalizeText(brainrotName), 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
-local function isValidPetName(name)
-    if not name or name == "" then return false end
-    local lowerName = name:lower()
-    for _, excluded in ipairs(CONFIG.SEARCH.EXCLUDED_NAMES) do
-        if lowerName:find(excluded) then
-            return false
-        end
-    end
-    return true
-end
-
-local function isValidGeneration(generation)
-    if not generation or generation == "" then return false end
-    local lowerGen = generation:lower()
-    if lowerGen:find("craft") or lowerGen:find("fus") then return false end
-    if lowerGen:match("%d+m%s+%d+s") or lowerGen:match("%d+s") then return false end
-    return true
 end
 
 local function parseGeneration(genStr)
@@ -197,113 +209,33 @@ local function getThumbnailUrl(petName)
             return imageUrl
         end
     end
-    return "https://cdn.discordapp.com/attachments/1416974801255399525/1416983746137034793/Unknown.webp?ex=68c8d473&is=68c782f3&hm=7dd12288ae192a42b0e0dd8219eac9e7ee8fc86e44cc12c16d0d6dacdfb87749&"
-end
-
-local function optimizeGraphics()
-    if not CONFIG.GRAPHICS.DISABLE_LIGHTING then return end
-    settings().Rendering.QualityLevel = CONFIG.GRAPHICS.QUALITY_LEVEL
-    Lighting.Brightness = 0
-    Lighting.GlobalShadows = false
-    Lighting.Ambient = Color3.new(0, 0, 0)
-    Lighting.OutdoorAmbient = Color3.new(0, 0, 0)
-    Lighting.FogEnd = 1
-    Lighting.FogStart = 0
-end
-
-local function makeObjectInvisible(object)
-    safeCall(function()
-        if object:IsA("BasePart") then
-            object.Transparency = 1
-            object.CastShadow = false
-        elseif object:IsA("Decal") or object:IsA("Texture") then
-            object.Transparency = 1
-        elseif object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam") then
-            object.Enabled = false
-        elseif object:IsA("Sound") and CONFIG.GRAPHICS.DISABLE_SOUNDS then
-            object.Playing = false
-        end
-    end)
-end
-
-local function setupGraphicsOptimization()
-    optimizeGraphics()
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        makeObjectInvisible(obj)
-    end
-    Workspace.DescendantAdded:Connect(makeObjectInvisible)
-end
-
-local function collectPetFromOverhead(overhead, genText, displayText)
-    local generationValue = parseGeneration(genText)
-    local brainrotName = displayText
-
-    if not isValidPetName(brainrotName) then 
-        return nil 
-    end
-    if not isValidGeneration(genText) then 
-        return nil 
-    end
-    if not isBrainrotPet(brainrotName) then 
-        return nil 
-    end
-    if generationValue < CONFIG.SEARCH.MIN_GENERATION then 
-        return nil 
-    end
-
-    local petKey = string.format("%s_%s_%s_%s", brainrotName, genText, game.JobId, overhead:GetFullName())
-    local currentTime = tick()
-
-    if petCache[petKey] and (currentTime - petCache[petKey]) < CONFIG.NETWORK.CACHE_DURATION then
-        return nil
-    end
-    petCache[petKey] = currentTime
-    return {
-        name = brainrotName,
-        generation = genText,
-        value = generationValue,
-        uniqueId = overhead:GetFullName()
-    }
+    return "https://cdn.discordapp.com/attachments/1416974801255399525/1416983746137034793/Unknown.webp"
 end
 
 local function sendToWebhook(petData)
     local value = parseGeneration(petData.generation)
     local tier = determineTier(value)
     if not tier then return end
-
     local webhookUrl = WEBHOOK_URLS[tier]
-    if not webhookUrl or webhookUrl == "" then
-        return
-    end
-
+    if not webhookUrl or webhookUrl == "" then return end
     local content = getMention(value)
     local thumbnailUrl = getThumbnailUrl(petData.name)
     local jobId = game.JobId
-
     local embed = {
         ["title"] = "CripoToMan - Notifier",
         ["type"] = "rich",
         ["color"] = 62973,
         ["timestamp"] = os.date("!%Y-%m-%dT%H:%M:%SZ"),
         ["fields"] = {
-            {["name"] = "\240\159\143\183 Name", ["value"] = "**```"..petData.name.."```**", ["inline"] = true},
-            {["name"] = "\240\159\148\176 Money per second", ["value"] = "**```"..petData.generation.."```**", ["inline"] = true},
-            {["name"] = "\240\159\145\165 Players", ["value"] = "**```"..petData.players.."```**", ["inline"] = true},
+            {["name"] = "🐷 Name", ["value"] = "**```"..petData.name.."```**", ["inline"] = true},
+            {["name"] = "💰 Money per second", ["value"] = "**```"..petData.generation.."```**", ["inline"] = true},
+            {["name"] = "👥 Players", ["value"] = "**```"..petData.players.."```**", ["inline"] = true},
             {["name"] = "Job-ID", ["value"] = "```"..jobId.."```", ["inline"] = false},
         },
-        ["thumbnail"] = {
-            ["url"] = thumbnailUrl
-        },
-        ["footer"] = {
-            ["text"] = "\194\169 All rights reserved - Cripo."
-        }
+        ["thumbnail"] = {["url"] = thumbnailUrl},
+        ["footer"] = {["text"] = "© All rights reserved - Cripo."}
     }
-
-    local payload = {
-        ["content"] = content,
-        ["embeds"] = {embed}
-    }
-
+    local payload = {["content"] = content, ["embeds"] = {embed}}
     local requestFunc = http_request or request or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
     if requestFunc then
         requestFunc({
@@ -315,55 +247,7 @@ local function sendToWebhook(petData)
     end
 end
 
-local function scanPlots()
-    local playersCount = #Players:GetPlayers()
-    if playersCount >= 8 then return 0 end
-
-    local collectedPets = {}
-
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        if (obj:IsA("SurfaceGui") or obj:IsA("BillboardGui")) and obj.Name == "AnimalOverhead" then
-            local gen = obj:FindFirstChild("Generation")
-            local display = obj:FindFirstChild("DisplayName")
-            local mut = obj:FindFirstChild("Mutation")
-
-            if gen and gen:IsA("TextLabel") and display and display:IsA("TextLabel") and mut and mut:IsA("TextLabel") then
-                local genText = gen.Text
-                local displayText = display.Text
-                local mutText = mut.Text
-                local generationValue = parseGeneration(genText)
-
-                if genText ~= "" and displayText ~= "" and mutText.Text ~= "" and mut.Visible == true then
-                    local cleanMutText = cleanHtmlTags(mutText)
-                    local brainrotName = cleanMutText ~= "Normal" and cleanMutText.." "..displayText or displayText
-                    local pet = collectPetFromOverhead(obj, genText, brainrotName)
-                    if pet then
-                        pet.players = playersCount.."/8"
-                        table.insert(collectedPets, pet)
-                    end
-                elseif genText ~= "" and displayText ~= "" and mut.Visible == false then
-                    local pet = collectPetFromOverhead(obj, genText, displayText)
-                    if pet then
-                        pet.players = playersCount.."/8"
-                        table.insert(collectedPets, pet)
-                    end
-                end
-            end
-        end
-    end
-
-    for _, pet in ipairs(collectedPets) do
-        local value = parseGeneration(pet.generation)
-        local tier = determineTier(value)
-        if tier == "10m" or tier == "50m" or tier == "100m" or tier == "300m" then
-            sendToWebhook(pet)
-            task.wait(0.05)
-        end
-    end
-    return #collectedPets
-end
-
--- SERVER HOP CON RETRIES Y LOGICA DE TU EJEMPLO
+-- SERVER HOP LOGIC
 local API_URL = "https://api-skidded-skidded.up.railway.app/get-server"
 local PLACE_ID = 109983668079237
 local LocalPlayer = Players.LocalPlayer
@@ -423,7 +307,7 @@ end)
 
 local function mainLoop()
     log("info", "Notificador iniciado")
-    setupGraphicsOptimization()
+    -- NO optimización gráfica, para no ocultar overheads
     safeCall(scanPlots, "Erro na varredura")
     task.wait(12)
     Teleport_To_Server()
