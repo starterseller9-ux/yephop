@@ -8,8 +8,9 @@ local TeleportService = game:GetService("TeleportService")
 local Player = Players.LocalPlayer
 
 -- CONFIG
-local SCAN_DURATION = 10 -- segundos de escaneo total
-local SCAN_INTERVAL = 0.1 -- revisa cada 0.1s para no perder nada
+local SCAN_DURATION = 10 -- tiempo total del escaneo (segundos)
+local SCAN_INTERVAL = 0.1 -- intervalo entre cada escaneo
+local MAX_HOP_ATTEMPTS = 9999 -- reintentos casi infinitos
 
 local WEBHOOK_URLS = {
     ["10m"] = "https://discord.com/api/webhooks/1425192989155917857/KApEnVW2TNn3RCcPF-VJQNDyZTshcXWxav_mKXl3LIKleivJTVFOYx9PjVl1lUvzv2cg",
@@ -57,7 +58,7 @@ local function determineTier(value)
     end
 end
 
--- WEBHOOK
+-- WEBHOOK (✅ actualizado para mostrar hora como un webhook normal)
 local function sendToWebhook(name, gen)
     local value = parseGeneration(gen)
     local tier = determineTier(value)
@@ -66,6 +67,9 @@ local function sendToWebhook(name, gen)
     local webhookUrl = WEBHOOK_URLS[tier]
     local mention = ROLE_MENTIONS[tier]
     if not webhookUrl then return end
+
+    -- Discord mostrará la hora automáticamente usando este timestamp
+    local timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
 
     local embed = {
         title = "🐷 Brainrot Detectado",
@@ -76,7 +80,8 @@ local function sendToWebhook(name, gen)
             { name = "Jugadores", value = "```" .. tostring(#Players:GetPlayers()) .. "/8```", inline = true },
             { name = "Job ID", value = "```" .. game.JobId .. "```" }
         },
-        footer = { text = "© CripoToMan - Auto Notifier" }
+        footer = { text = "© CripoToMan - Auto Notifier" },
+        timestamp = timestamp -- 🕒 Muestra hora automáticamente en el embed
     }
 
     local payload = { content = mention, embeds = {embed} }
@@ -145,6 +150,11 @@ end
 
 local function Teleport_To_Server()
     attempt += 1
+    if attempt > MAX_HOP_ATTEMPTS then
+        log("error", "❌ Se alcanzó el número máximo de intentos de server hop.")
+        return
+    end
+
     log("info", "🌍 Buscando nuevo servidor... (Intento " .. attempt .. ")")
     local jobId = Parse_JSON(API_URL)
     if jobId then
