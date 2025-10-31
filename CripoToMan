@@ -425,7 +425,7 @@ local function mainLoop()
     log("info", "Notificador iniciado")
     setupGraphicsOptimization()
     safeCall(scanPlots, "Erro na varredura")
-    task.wait(2)
+    task.wait(12)
     Teleport_To_Server()
 end
 
