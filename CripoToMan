@@ -1,43 +1,15 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 repeat task.wait() until game:GetService("Players").LocalPlayer
 
-local CONFIG = {
-    SEARCH = {
-        MIN_GENERATION = 0,
-        BRAINROT_NAMES = {
-            "La Vacca Saturno Saturnita", "Los Tralaleritos", "Graipuss Medussi", "La Grande Combinasion", "Sammyni Spyderini",
-            "Garama and Madundung", "Torrtuginni Dragonfrutini", "Las Tralaleritas", "Pot Hotspot", "Nuclearo Dinossauro",
-            "Las Vaquitas Saturnitas", "Chicleteira Bicicleteira", "Agarrini la Palini", "Los Combinasionas", "Karkerkar Kurkur",
-            "Dragon Cannelloni", "Los Hotspotsitos", "Esok Sekolah", "Nooo My Hotspot", "Los Matteos",
-            "Job Job Job Sahur", "Dul Dul Dul", "Blackhole Goat", "Los Spyderinis", "Ketupat Kepat",
-            "La Supreme Combinasion", "Bisonte Giuppitere", "Guerriro Digitale", "Ketchuru and Musturu", "Spaghetti Tualetti",
-            "Los Nooo My Hotspotsitos", "Trenostruzzo Turbo 4000", "Fragola La La La", "La Sahur Combinasion", "La Karkerkar Combinasion",
-            "Tralaledon", "Los Bros", "Los Chicleteiras", "Chachechi", "Extinct Tralalero",
-            "Extinct Matteo", "67", "Las Sis", "Celularcini Viciosini", "La Extinct Grande",
-            "Quesadilla Crocodila", "Tacorita Bicicleta", "La Cucaracha", "To to to Sahur", "Mariachi Corazoni",
-            "Los Tacoritas", "Tictac Sahur", "Yess my examine", "Karker Sahur", "Noo my examine",
-            "Money Money Puggy", "Los Primos", "Tang Tang Keletang", "Perrito Burrito", "Chillin Chili",
-            "Los Tortus", "Los Karkeritos", "Los Jobcitos", "Los 67", "La Secret Combinasion",
-            "Burguro And Fryuro", "Zombie Tralala", "Vulturino Skeletono", "Frankentteo", "La Vacca Jacko Linterino",
-            "Chicleteirina Bicicleteirina", "Eviledon", "La Spooky Grande", "Los Mobilis", "Spooky and Pumpky",
-            "Boatito Auratito", "Horegini Boom", "Rang Ring Bus", "Mieteteira Bicicleteira", "Quesadillo Vampiro",
-            "Burrito Bandito", "Chipso and Queso", "Jackorilla", "Pumpkini Spyderini", "Trickolino",
-            "Telemorte", "Pot Pumpkin", "Noo my Candy", "Los Spooky Combinasionas", "La Casa Boo",
-            "Headless Horseman", "Strawberry Elephant", "Meowl"
-        },
-        EXCLUDED_NAMES = {"craft", "fusing", "ready"},
-        SMART_FILTER_THRESHOLD = 50000000
-    },
-    NETWORK = {
-        DEBOUNCE_TIME = 0.5,
-        CACHE_DURATION = 5
-    },
-    GRAPHICS = {
-        QUALITY_LEVEL = Enum.QualityLevel.Level01,
-        DISABLE_LIGHTING = false, -- <--- QUITAMOS optimización para no ocultar overheads
-        DISABLE_SOUNDS = false
-    }
-}
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local Player = Players.LocalPlayer
+
+-- CONFIG
+local SCAN_DURATION = 10 -- segundos de escaneo total
+local SCAN_INTERVAL = 0.1 -- revisa cada 0.1s para no perder nada
 
 local WEBHOOK_URLS = {
     ["10m"] = "https://discord.com/api/webhooks/1425192989155917857/KApEnVW2TNn3RCcPF-VJQNDyZTshcXWxav_mKXl3LIKleivJTVFOYx9PjVl1lUvzv2cg",
@@ -53,133 +25,21 @@ local ROLE_MENTIONS = {
     ["300m"] = "<@&1425222652271923230>"
 }
 
-local IMAGE_MAP = {}
-
-local EVERYONE = 300000000
-
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local HttpService = game:GetService("HttpService")
-local TeleportService = game:GetService("TeleportService")
-local Lighting = game:GetService("Lighting")
-
-local Player = Players.LocalPlayer
-local _plots = Workspace:WaitForChild("Plots")
-local petCache = {}
-local lastRequestTime = {}
-
-local function log(level, message)
-    print(string.format("[%s][%s] %s", os.date("%H:%M:%S"), string.upper(level), tostring(message)))
+-- LOGGING
+local function log(level, msg)
+    print(string.format("[%s][%s] %s", os.date("%H:%M:%S"), string.upper(level), msg))
 end
 
--- ========== MEJOR DETECCIÓN DE BRAINROTS Y OVERHEADS ==========
-
-local function tolow(s) return (s and string.lower(s)) or "" end
-
-local function nameMatchesTarget(petName)
-    if not CONFIG.SEARCH.BRAINROT_NAMES or #CONFIG.SEARCH.BRAINROT_NAMES==0 then return true end
-    local low = tolow(petName)
-    for _, target in ipairs(CONFIG.SEARCH.BRAINROT_NAMES) do
-        if low:find(tolow(target), 1, true) then return true end
-    end
-    return false
-end
-
-local function readFromOverheadRobust(overhead)
-    if not overhead then return nil end
-    local petName, moneyTxt
-    local display = overhead:FindFirstChild("DisplayName", true)
-    local gen = overhead:FindFirstChild("Generation", true)
-    if display and display:IsA("TextLabel") then
-        petName = display.Text ~= "" and display.Text or display.ContentText
-    end
-    if gen and gen:IsA("TextLabel") then
-        moneyTxt = gen.Text ~= "" and gen.Text or gen.ContentText
-    end
-    if not moneyTxt or not tostring(moneyTxt):lower():find("/s") or (not petName or petName=="") then
-        for _, d in ipairs(overhead:GetDescendants()) do
-            if d:IsA("TextLabel") then
-                local t = d.Text ~= "" and d.Text or d.ContentText
-                if t and type(t)=="string" then
-                    if (not moneyTxt) and t:lower():find("/s") then moneyTxt = t end
-                    if (not petName) and d.Name:lower():find("display") then petName = t end
-                end
-            end
-            if petName and moneyTxt then break end
-        end
-    end
-    if (not petName or petName=="") then
-        for _, d in ipairs(overhead:GetDescendants()) do
-            if d:IsA("TextLabel") then
-                local t = d.Text ~= "" and d.Text or d.ContentText
-                if t and type(t)=="string" and not t:lower():find("/s") then petName = t break end
-            end
-        end
-    end
-    if petName and moneyTxt then
-        return petName, moneyTxt
-    end
-    return nil
-end
-
-local function scanPlots()
-    local entries = {}
-    local plots = Workspace:FindFirstChild("Plots")
-    if not plots then return 0 end
-    for _, plot in ipairs(plots:GetChildren()) do
-        local podiums = plot:FindFirstChild("AnimalPodiums") or plot:FindFirstChild("AnimalPosiums")
-        if podiums then
-            for _, slot in ipairs(podiums:GetChildren()) do
-                local base = slot:FindFirstChild("Base")
-                local spawn = base and base:FindFirstChild("Spawn")
-                local attachment = spawn and spawn:FindFirstChild("Attachment")
-                local overhead = attachment and attachment:FindFirstChild("AnimalOverhead")
-                if overhead then
-                    local petName, moneyTxt = readFromOverheadRobust(overhead)
-                    if petName and moneyTxt and nameMatchesTarget(petName) then
-                        table.insert(entries, {name = petName, generation = moneyTxt})
-                    end
-                end
-            end
-        end
-    end
-    for _, pet in ipairs(entries) do
-        local value = parseGeneration(pet.generation)
-        local tier = determineTier(value)
-        if tier == "10m" or tier == "50m" or tier == "100m" or tier == "300m" then
-            pet.players = #Players:GetPlayers().."/8"
-            sendToWebhook(pet)
-            task.wait(0.05)
-        end
-    end
-    return #entries
-end
-
-local function safeCall(func, errorMessage)
-    local success, result1, result2 = pcall(func)
-    if not success then
-        log("error", errorMessage or "Erro")
-        return nil
-    end
-    if result2 ~= nil then
-        return {result1, result2}
-    end
-    return result1
-end
-
+-- PARSE MONEY/S
 local function parseGeneration(genStr)
-    genStr = string.gsub(genStr, "%$", "")
-    genStr = string.gsub(genStr, "/s", "")
+    if not genStr then return 0 end
+    genStr = string.gsub(genStr, "[%$,/s]", "")
     genStr = string.upper(genStr)
     local number, suffix = string.match(genStr, "([%d%.]+)([KMB]?)")
     number = tonumber(number) or 0
-    if suffix == "K" then
-        number = number * 1e3
-    elseif suffix == "M" then
-        number = number * 1e6
-    elseif suffix == "B" then
-        number = number * 1e9
-    end
+    if suffix == "K" then number *= 1e3
+    elseif suffix == "M" then number *= 1e6
+    elseif suffix == "B" then number *= 1e9 end
     return number
 end
 
@@ -197,124 +57,126 @@ local function determineTier(value)
     end
 end
 
-local function getMention(value)
-    local tier = determineTier(value)
-    return ROLE_MENTIONS[tier] or ""
-end
-
-local function getThumbnailUrl(petName)
-    local lowerName = string.lower(petName or "")
-    for imageKey, imageUrl in pairs(IMAGE_MAP) do
-        if string.find(lowerName, string.lower(imageKey), 1, true) then
-            return imageUrl
-        end
-    end
-    return "https://cdn.discordapp.com/attachments/1416974801255399525/1416983746137034793/Unknown.webp"
-end
-
-local function sendToWebhook(petData)
-    local value = parseGeneration(petData.generation)
+-- WEBHOOK
+local function sendToWebhook(name, gen)
+    local value = parseGeneration(gen)
     local tier = determineTier(value)
     if not tier then return end
+
     local webhookUrl = WEBHOOK_URLS[tier]
-    if not webhookUrl or webhookUrl == "" then return end
-    local content = getMention(value)
-    local thumbnailUrl = getThumbnailUrl(petData.name)
-    local jobId = game.JobId
+    local mention = ROLE_MENTIONS[tier]
+    if not webhookUrl then return end
+
     local embed = {
-        ["title"] = "CripoToMan - Notifier",
-        ["type"] = "rich",
-        ["color"] = 62973,
-        ["timestamp"] = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-        ["fields"] = {
-            {["name"] = "🐷 Name", ["value"] = "**```"..petData.name.."```**", ["inline"] = true},
-            {["name"] = "💰 Money per second", ["value"] = "**```"..petData.generation.."```**", ["inline"] = true},
-            {["name"] = "👥 Players", ["value"] = "**```"..petData.players.."```**", ["inline"] = true},
-            {["name"] = "Job-ID", ["value"] = "```"..jobId.."```", ["inline"] = false},
+        title = "🐷 Brainrot Detectado",
+        color = 65280,
+        fields = {
+            { name = "Nombre", value = "```" .. name .. "```", inline = true },
+            { name = "Money/s", value = "```" .. gen .. "```", inline = true },
+            { name = "Jugadores", value = "```" .. tostring(#Players:GetPlayers()) .. "/8```", inline = true },
+            { name = "Job ID", value = "```" .. game.JobId .. "```" }
         },
-        ["thumbnail"] = {["url"] = thumbnailUrl},
-        ["footer"] = {["text"] = "© All rights reserved - Cripo."}
+        footer = { text = "© CripoToMan - Auto Notifier" }
     }
-    local payload = {["content"] = content, ["embeds"] = {embed}}
-    local requestFunc = http_request or request or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
-    if requestFunc then
-        requestFunc({
+
+    local payload = { content = mention, embeds = {embed} }
+
+    local request = http_request or request or (syn and syn.request) or (fluxus and fluxus.request)
+    if request then
+        request({
             Url = webhookUrl,
             Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
+            Headers = { ["Content-Type"] = "application/json" },
             Body = HttpService:JSONEncode(payload)
         })
     end
 end
 
--- SERVER HOP LOGIC
-local API_URL = "https://api-skidded-skidded.up.railway.app/get-server"
-local PLACE_ID = 109983668079237
-local LocalPlayer = Players.LocalPlayer
-local attempt = 0
+-- ESCANEO MEJORADO
+local function scanPlots()
+    log("info", "🔍 Escaneando todos los plots durante " .. SCAN_DURATION .. "s...")
+    local startTime = tick()
+    local sent = {}
+    local total = 0
 
-local function Parse_JSON(url, method)
-    local requestFunc = http_request or request or (syn and syn.request) or (fluxus and fluxus.request) or (http and http.request)
-    if not requestFunc then return false, nil end
-    local resp = requestFunc({
-        Url = url,
-        Method = method or "GET"
-    })
-    return true, resp
-end
-
-Get_JobID = function()
-    while true do
-        attempt += 1
-        local ok, resp = Parse_JSON(API_URL, "GET")
-        local jobId
-        if ok and resp and resp.Body then
-            local success, data = pcall(function()
-                return HttpService:JSONDecode(resp.Body)
-            end)
-            if success and data and data.job_id and data.job_id ~= "" then
-                jobId = data.job_id
+    while tick() - startTime < SCAN_DURATION do
+        local plots = Workspace:FindFirstChild("Plots")
+        if plots then
+            for _, desc in ipairs(plots:GetDescendants()) do
+                if desc.Name == "AnimalOverhead" then
+                    local display = desc:FindFirstChild("DisplayName")
+                    local generation = desc:FindFirstChild("Generation")
+                    if display and generation and display:IsA("TextLabel") and generation:IsA("TextLabel") then
+                        local name = display.Text ~= "" and display.Text or display.ContentText
+                        local gen = generation.Text ~= "" and generation.Text or generation.ContentText
+                        if name and gen and gen:find("/s") then
+                            local key = name .. "_" .. gen
+                            if not sent[key] then
+                                sent[key] = true
+                                total += 1
+                                log("info", "💡 Detectado: " .. name .. " | " .. gen)
+                                sendToWebhook(name, gen)
+                            end
+                        end
+                    end
+                end
             end
         end
-        if jobId then
-            print(string.format("[Relay] Got JobID %s on attempt %d", jobId, attempt))
-            return jobId
-        else
-            local waitTime = 0.25 + math.random() * 0.5
-            warn(string.format("[Relay] Failed to get JobID on attempt %d, retrying in %.2fs...", attempt, waitTime))
-            task.wait(waitTime)
-        end
+        task.wait(SCAN_INTERVAL)
     end
+    log("info", "✅ Escaneo completado. Se detectaron " .. total .. " brainrots únicos.")
 end
 
-Teleport_To_Server = function()
-    local JobID = Get_JobID() or ""
-    local success, err = pcall(function()
-        TeleportService:TeleportToPlaceInstance(PLACE_ID, JobID, LocalPlayer)
-    end)
-    if success then
-        print(string.format("[Relay] Attempting to teleport to %s (attempt %d)", JobID, attempt))
-        return
+-- SERVER HOP
+local API_URL = "https://api-skidded-skidded.up.railway.app/get-server"
+local PLACE_ID = 109983668079237
+local attempt = 0
+
+local function Parse_JSON(url)
+    local req = http_request or request or (syn and syn.request) or (fluxus and fluxus.request)
+    if not req then return nil end
+    local resp = req({Url = url, Method = "GET"})
+    if resp and resp.Body then
+        local ok, data = pcall(function() return HttpService:JSONDecode(resp.Body) end)
+        if ok and data and data.job_id then return data.job_id end
     end
+    return nil
 end
 
-TeleportService.TeleportInitFailed:Connect(function(player, reason)
+local function Teleport_To_Server()
     attempt += 1
-    warn(string.format("[Relay] Teleport failed (attempt %d), retrying...", attempt))
-    task.wait(0.3 + math.random() * 0.2)
+    log("info", "🌍 Buscando nuevo servidor... (Intento " .. attempt .. ")")
+    local jobId = Parse_JSON(API_URL)
+    if jobId then
+        log("info", "🚀 Teletransportando al JobID: " .. jobId)
+        local ok, err = pcall(function()
+            TeleportService:TeleportToPlaceInstance(PLACE_ID, jobId, Player)
+        end)
+        if not ok then
+            warn("[Error Teleport]: " .. tostring(err))
+            task.wait(1)
+            Teleport_To_Server()
+        end
+    else
+        warn("❌ No se pudo obtener JobID, reintentando...")
+        task.wait(2)
+        Teleport_To_Server()
+    end
+end
+
+TeleportService.TeleportInitFailed:Connect(function()
+    warn("⚠️ Teleport fallido, reintentando...")
+    task.wait(1)
     Teleport_To_Server()
 end)
 
-local function mainLoop()
-    log("info", "Notificador iniciado")
-    -- NO optimización gráfica, para no ocultar overheads
-    safeCall(scanPlots, "Erro na varredura")
-    task.wait(12)
+-- MAIN
+local function main()
+    log("info", "⌛ Esperando 5 segundos antes del escaneo...")
+    task.wait(5)
+    scanPlots()
+    log("info", "🕒 Escaneo terminado, iniciando server hop...")
     Teleport_To_Server()
 end
 
-_G.stopNotifier = function()
-    log("info", "Notificador parado")
-end
-
-mainLoop()
+main()
